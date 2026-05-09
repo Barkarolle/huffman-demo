@@ -1,0 +1,211 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <title>哈夫曼树动态构建演示</title>
+    <script type="text/javascript" src="https://unpkg.com/vis-network/standalone/umd/vis-network.min.js"></script>
+    <style>
+        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; text-align: center; margin: 20px; background-color: #f4f6f9;}
+        h2 { color: #333; margin-bottom: 5px; }
+        .subtitle { color: #666; font-size: 14px; margin-bottom: 15px; }
+        #mynetwork { width: 80%; height: 500px; border: 2px solid #ccc; border-radius: 10px; margin: 20px auto; background-color: #fff;}
+        .controls { background: #fff; padding: 20px; border-radius: 10px; display: inline-block; box-shadow: 0 2px 5px rgba(0,0,0,0.1);}
+        button { padding: 10px 15px; margin: 0 5px; cursor: pointer; border: none; border-radius: 5px; font-size: 15px; transition: 0.3s; color: white;}
+        #initBtn { background-color: #28a745; }
+        #initBtn:hover { background-color: #218838; }
+        #nextBtn { background-color: #007bff; }
+        #nextBtn:hover { background-color: #0056b3; }
+        #prevBtn { background-color: #ffc107; color: #333; }
+        #prevBtn:hover { background-color: #e0a800; }
+        button:disabled { background-color: #cccccc !important; color: #666 !important; cursor: not-allowed; }
+        input { padding: 10px; width: 300px; font-size: 16px; border: 1px solid #ccc; border-radius: 5px; }
+        .note { color: #888; font-size: 13px; margin-top: 15px; text-align: left; background: #f8f9fa; padding: 10px; border-left: 4px solid #007bff;}
+        #codeResult { width: 80%; margin: 20px auto; background: #fff; padding: 20px; border-radius: 10px; box-shadow: 0 2px 5px rgba(0,0,0,0.1); display: none; text-align: left;}
+        .code-item { display: inline-block; background: #e9ecef; padding: 5px 10px; margin: 5px; border-radius: 5px; font-family: monospace; font-size: 16px;}
+        .code-char { font-weight: bold; color: #d9534f; }
+    </style>
+</head>
+<body>
+    <h2>哈夫曼树动态构建演示 (Huffman Tree)</h2>
+    <div class="subtitle">展示从字符频率统计到前缀编码生成的完整过程</div>
+    
+    <div class="controls">
+        <input type="text" id="inputText" value="time tries truth" placeholder="输入字符串...">
+        <button onclick="initSystem()" id="initBtn">1. 统计频率 & 初始化森林</button>
+        <button onclick="nextStep()" id="nextBtn" disabled>2. 下一步 (合并最小节点)</button>
+        <button onclick="prevStep()" id="prevBtn" disabled>3. 上一步 (撤销)</button>
+        
+        <div class="note">
+            <strong>算法规则注释：</strong><br>
+            1. 每次从森林中选取**权值（频次）最小**的两个节点进行合并。<br>
+            2. 新生成的父节点权值为两子节点权值之和。<br>
+            3. 左分支统一标记为 <code>0</code>，右分支统一标记为 <code>1</code>。<br>
+            <i>*注：部分节点的视觉左右位置受排版引擎防交叉算法影响，请以边上的 0/1 标签为准提取编码。</i>
+        </div>
+    </div>
+
+    <div id="mynetwork"></div>
+
+    <div id="codeResult">
+        <h3>🎉 最终哈夫曼编码字典 (前缀编码)</h3>
+        <div id="codeList"></div>
+    </div>
+
+    <script>
+        let nodes, edges, network;
+        let activeNodes = []; 
+        let nodeIdCounter = 0;
+        let historyStack = []; 
+
+        function initSystem() {
+            let text = document.getElementById('inputText').value;
+            if(!text) return alert("请输入字符串");
+
+            let freqMap = {};
+            for(let char of text) {
+                freqMap[char] = (freqMap[char] || 0) + 1;
+            }
+
+            let nodesArray = [];
+            activeNodes = [];
+            nodeIdCounter = 0;
+            historyStack = []; 
+            document.getElementById('codeResult').style.display = 'none'; // 隐藏结果区
+
+            for(let char in freqMap) {
+                let displayChar = char === ' ' ? '空格' : char;
+                let node = {
+                    id: nodeIdCounter++,
+                    label: `${displayChar}\n(${freqMap[char]})`,
+                    weight: freqMap[char],
+                    isLeaf: true, // 标记为叶子节点，方便后续提取编码
+                    charName: displayChar,
+                    shape: 'box',
+                    color: { background: '#97C2FC', border: '#2B7CE9' },
+                    font: { size: 16 }
+                };
+                nodesArray.push(node);
+                activeNodes.push(node);
+            }
+
+            nodes = new vis.DataSet(nodesArray);
+            edges = new vis.DataSet([]);
+
+            let container = document.getElementById('mynetwork');
+            let data = { nodes: nodes, edges: edges };
+            
+            let options = {
+                layout: {
+                    hierarchical: {
+                        direction: 'UD',
+                        sortMethod: 'directed',
+                        levelSeparation: 80,
+                        nodeSpacing: 100
+                    }
+                },
+                physics: false 
+            };
+            network = new vis.Network(container, data, options);
+            
+            document.getElementById('nextBtn').disabled = false;
+            document.getElementById('prevBtn').disabled = true;
+        }
+
+        function nextStep() {
+            if (activeNodes.length <= 1) return;
+
+            let currentState = {
+                activeNodesCopy: [...activeNodes], 
+                nodeCounterState: nodeIdCounter
+            };
+
+            activeNodes.sort((a, b) => a.weight - b.weight);
+            let leftChild = activeNodes.shift();
+            let rightChild = activeNodes.shift();
+
+            let parentWeight = leftChild.weight + rightChild.weight;
+            let parentNode = {
+                id: nodeIdCounter++,
+                label: `合并\n(${parentWeight})`,
+                weight: parentWeight,
+                isLeaf: false,
+                shape: 'ellipse',
+                color: { background: '#FB7E81', border: '#D04E52' },
+                font: { size: 16 }
+            };
+
+            nodes.add(parentNode);
+            activeNodes.push(parentNode);
+
+            let addedEdgeIds = edges.add([
+                { from: parentNode.id, to: leftChild.id, label: '0', font: {align: 'middle', size: 16, background: 'white'}, color: '#333' },
+                { from: parentNode.id, to: rightChild.id, label: '1', font: {align: 'middle', size: 16, background: 'white'}, color: '#333' }
+            ]);
+
+            currentState.addedNodeId = parentNode.id;
+            currentState.addedEdgeIds = addedEdgeIds;
+            historyStack.push(currentState);
+
+            document.getElementById('prevBtn').disabled = false;
+
+            if (activeNodes.length <= 1) {
+                document.getElementById('nextBtn').disabled = true;
+                generateHuffmanCodes(); // 触发生成编码字典
+            }
+        }
+
+        function prevStep() {
+            if (historyStack.length === 0) return;
+            
+            // 隐藏结果面板
+            document.getElementById('codeResult').style.display = 'none';
+
+            let lastState = historyStack.pop();
+
+            nodes.remove(lastState.addedNodeId);
+            edges.remove(lastState.addedEdgeIds);
+
+            activeNodes = lastState.activeNodesCopy;
+            nodeIdCounter = lastState.nodeCounterState;
+
+            document.getElementById('nextBtn').disabled = false;
+            
+            if (historyStack.length === 0) {
+                document.getElementById('prevBtn').disabled = true;
+            }
+        }
+
+        // 核心：深度优先搜索(DFS)遍历整棵树生成编码
+        function generateHuffmanCodes() {
+            let rootId = activeNodes[0].id; // 最后剩下的那个节点就是根节点
+            let codes = {};
+            let edgesArray = edges.get();
+            let nodesArray = nodes.get();
+
+            function dfs(currentNodeId, currentCode) {
+                let node = nodesArray.find(n => n.id === currentNodeId);
+                // 如果是叶子节点，记录编码
+                if (node.isLeaf) {
+                    codes[node.charName] = currentCode;
+                    return;
+                }
+                // 查找它的子节点
+                let childrenEdges = edgesArray.filter(e => e.from === currentNodeId);
+                childrenEdges.forEach(edge => {
+                    dfs(edge.to, currentCode + edge.label);
+                });
+            }
+
+            dfs(rootId, "");
+
+            // 渲染到页面
+            let htmlStr = "";
+            for(let char in codes) {
+                htmlStr += `<div class="code-item"><span class="code-char">${char}</span> : ${codes[char]}</div>`;
+            }
+            document.getElementById('codeList').innerHTML = htmlStr;
+            document.getElementById('codeResult').style.display = 'block';
+        }
+    </script>
+</body>
+</html>
